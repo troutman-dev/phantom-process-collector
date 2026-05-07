@@ -1,23 +1,15 @@
 use serde::Serialize;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use sysinfo::{Process, System};
+use sysinfo::System;
 use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
 
 // ---------------------------------------------------------------------------
 // Data structures
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ProcessObservation {
-    pub cpu_percent: f32,
-    pub memory_bytes: u64,
-    pub timestamp: u64,
-    pub machine_was_idle: bool,
-}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ProcessWindow {
@@ -27,21 +19,18 @@ pub struct ProcessWindow {
     pub exe_path: String,
     pub parent_pid: u32,
     pub spawn_time_unix: u64,
-    // Rolling window
-    pub observations: VecDeque<ProcessObservation>,
     // Welford accumulators
     pub cpu_mean: f64,
     pub cpu_std: f64,
     pub cpu_m2: f64,
-    pub mem_mean: f64,
-    pub mem_std: f64,
-    pub mem_m2: f64,
     pub sample_count: u64,
     // Current tick values
     pub cpu_current: f32,
     pub mem_current: u64,
     pub external_connections: u32,
     pub machine_idle_ms: u64,
+    pub disk_read_bytes: u64,
+    pub disk_write_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,7 +62,7 @@ fn get_machine_idle_ms() -> u64 {
                 cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
                 dwTime: 0,
             };
-            GetLastInputInfo(&mut lii);
+            let _ = GetLastInputInfo(&mut lii);
             let tick_now = GetTickCount();
             (tick_now.wrapping_sub(lii.dwTime)) as u64
         }
@@ -99,14 +88,91 @@ fn is_internal(addr: &IpAddr) -> bool {
     }
 }
 
-/// Count external TCP/UDP connections for a process.
-/// Uses platform-specific methods where available; returns 0 otherwise.
-fn count_external_connections(_proc: &Process) -> u32 {
-    // sysinfo 0.30 does not expose per-process connection lists cross-platform.
-    // On Windows a future upgrade to sysinfo 0.31+ or a direct netstat parse
-    // would populate this field. Stubbed to 0 for portability.
-    let _ = is_internal; // suppress unused-function warning
-    0
+/// Count external TCP connections for a process using GetExtendedTcpTable.
+/// Covers both IPv4 (AF_INET) and IPv6 (AF_INET6). Returns 0 on non-Windows.
+fn count_external_connections(pid: u32) -> u32 {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::NetworkManagement::IpHelper::{
+            GetExtendedTcpTable,
+            MIB_TCP6ROW_OWNER_PID, MIB_TCP6TABLE_OWNER_PID,
+            MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID,
+            TCP_TABLE_OWNER_PID_ALL,
+        };
+        use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6};
+
+        let mut count: u32 = 0;
+
+        unsafe {
+            // --- IPv4 ---
+            let mut size: u32 = 0;
+            let _ = GetExtendedTcpTable(None, &mut size, false, AF_INET.0 as u32, TCP_TABLE_OWNER_PID_ALL, 0);
+            if size > 0 {
+                let mut buf: Vec<u8> = vec![0u8; size as usize];
+                let result = GetExtendedTcpTable(
+                    Some(buf.as_mut_ptr() as *mut _),
+                    &mut size,
+                    false,
+                    AF_INET.0 as u32,
+                    TCP_TABLE_OWNER_PID_ALL,
+                    0,
+                );
+                if result == 0 {
+                    let table = &*(buf.as_ptr() as *const MIB_TCPTABLE_OWNER_PID);
+                    // SAFETY: MIB_TCPTABLE_OWNER_PID ends with a 1-element array; actual
+                    // rows follow contiguously in the buffer we allocated.
+                    let rows: &[MIB_TCPROW_OWNER_PID] = std::slice::from_raw_parts(
+                        table.table.as_ptr(),
+                        table.dwNumEntries as usize,
+                    );
+                    count += rows.iter()
+                        .filter(|row| row.dwOwningPid == pid)
+                        .filter(|row| {
+                            let addr = u32::from_be(row.dwRemoteAddr);
+                            let ip = std::net::Ipv4Addr::from(addr.to_be_bytes());
+                            !is_internal(&std::net::IpAddr::V4(ip))
+                        })
+                        .count() as u32;
+                }
+            }
+
+            // --- IPv6 ---
+            let mut size6: u32 = 0;
+            let _ = GetExtendedTcpTable(None, &mut size6, false, AF_INET6.0 as u32, TCP_TABLE_OWNER_PID_ALL, 0);
+            if size6 > 0 {
+                let mut buf6: Vec<u8> = vec![0u8; size6 as usize];
+                let result6 = GetExtendedTcpTable(
+                    Some(buf6.as_mut_ptr() as *mut _),
+                    &mut size6,
+                    false,
+                    AF_INET6.0 as u32,
+                    TCP_TABLE_OWNER_PID_ALL,
+                    0,
+                );
+                if result6 == 0 {
+                    let table6 = &*(buf6.as_ptr() as *const MIB_TCP6TABLE_OWNER_PID);
+                    // SAFETY: same trailing-array layout as the IPv4 table.
+                    let rows6: &[MIB_TCP6ROW_OWNER_PID] = std::slice::from_raw_parts(
+                        table6.table.as_ptr(),
+                        table6.dwNumEntries as usize,
+                    );
+                    count += rows6.iter()
+                        .filter(|row| row.dwOwningPid == pid)
+                        .filter(|row| {
+                            let ip = std::net::Ipv6Addr::from(row.ucRemoteAddr);
+                            !is_internal(&std::net::IpAddr::V6(ip))
+                        })
+                        .count() as u32;
+                }
+            }
+        }
+
+        count
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        0
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -121,18 +187,16 @@ impl ProcessWindow {
             exe_path,
             parent_pid,
             spawn_time_unix,
-            observations: VecDeque::new(),
             cpu_mean: 0.0,
             cpu_std: 0.0,
             cpu_m2: 0.0,
-            mem_mean: 0.0,
-            mem_std: 0.0,
-            mem_m2: 0.0,
             sample_count: 0,
             cpu_current: 0.0,
             mem_current: 0,
             external_connections: 0,
             machine_idle_ms: 0,
+            disk_read_bytes: 0,
+            disk_write_bytes: 0,
         }
     }
 
@@ -142,12 +206,15 @@ impl ProcessWindow {
         mem: u64,
         external_connections: u32,
         machine_idle_ms: u64,
-        window_size: usize,
+        disk_read_bytes: u64,
+        disk_write_bytes: u64,
     ) {
         self.cpu_current = cpu;
         self.mem_current = mem;
         self.external_connections = external_connections;
         self.machine_idle_ms = machine_idle_ms;
+        self.disk_read_bytes = disk_read_bytes;
+        self.disk_write_bytes = disk_write_bytes;
 
         // Welford for CPU
         let cpu_f = cpu as f64;
@@ -157,26 +224,6 @@ impl ProcessWindow {
         let delta2_cpu = cpu_f - self.cpu_mean;
         self.cpu_m2 += delta_cpu * delta2_cpu;
         self.cpu_std = (self.cpu_m2 / self.sample_count as f64).sqrt();
-
-        // Welford for memory
-        let mem_f = mem as f64;
-        let delta_mem = mem_f - self.mem_mean;
-        self.mem_mean += delta_mem / self.sample_count as f64;
-        let delta2_mem = mem_f - self.mem_mean;
-        self.mem_m2 += delta_mem * delta2_mem;
-        self.mem_std = (self.mem_m2 / self.sample_count as f64).sqrt();
-
-        // Rolling observation window
-        let obs = ProcessObservation {
-            cpu_percent: cpu,
-            memory_bytes: mem,
-            timestamp: now_ms(),
-            machine_was_idle: machine_idle_ms > 300_000,
-        };
-        self.observations.push_back(obs);
-        if self.observations.len() > window_size {
-            self.observations.pop_front();
-        }
     }
 }
 
@@ -187,15 +234,52 @@ impl ProcessWindow {
 pub async fn polling_loop(
     active: Arc<RwLock<HashMap<u32, ProcessWindow>>>,
     tombstones: Arc<RwLock<HashMap<(u32, String), TombstonedProcess>>>,
+    system_stats: Arc<RwLock<(f32, u64, u64, u32)>>,
     poll_interval_ms: u64,
-    window_size: usize,
 ) {
     let mut ticker = interval(Duration::from_millis(poll_interval_ms));
     let mut sys = System::new_all();
+    // Previous (busy_ticks, total_ticks) for delta-based CPU% via GetSystemTimes.
+    // Initialised to 0; first loop iteration sets the baseline, second gives real data.
+    let mut _cpu_prev: (u64, u64) = (0, 0);
 
     loop {
         ticker.tick().await;
         sys.refresh_all();
+
+        let cpu_count = sys.cpus().len().max(1) as u32;
+
+        #[cfg(target_os = "windows")]
+        let cpu_pct = {
+            use windows::Win32::Foundation::FILETIME;
+            use windows::Win32::System::Threading::GetSystemTimes;
+            unsafe {
+                let mut idle = FILETIME::default();
+                let mut kernel = FILETIME::default();
+                let mut user = FILETIME::default();
+                if GetSystemTimes(Some(&mut idle as *mut _), Some(&mut kernel as *mut _), Some(&mut user as *mut _)).is_ok() {
+                    let idle_t = ((idle.dwHighDateTime as u64) << 32) | idle.dwLowDateTime as u64;
+                    let kernel_t = ((kernel.dwHighDateTime as u64) << 32) | kernel.dwLowDateTime as u64;
+                    let user_t = ((user.dwHighDateTime as u64) << 32) | user.dwLowDateTime as u64;
+                    let total = kernel_t + user_t;
+                    let busy = total - idle_t;
+                    let (prev_busy, prev_total) = _cpu_prev;
+                    let delta_busy = busy.saturating_sub(prev_busy);
+                    let delta_total = total.saturating_sub(prev_total);
+                    _cpu_prev = (busy, total);
+                    if delta_total == 0 { 0.0 } else { (delta_busy as f32 / delta_total as f32) * 100.0 }
+                } else {
+                    0.0
+                }
+            }
+        };
+        #[cfg(not(target_os = "windows"))]
+        let cpu_pct = sys.cpus().iter().map(|c| c.cpu_usage()).sum::<f32>() / cpu_count as f32;
+
+        {
+            let mut stats = system_stats.write().await;
+            *stats = (cpu_pct, sys.used_memory(), sys.total_memory(), cpu_count);
+        }
 
         let machine_idle_ms = get_machine_idle_ms();
         let now = now_ms();
@@ -219,21 +303,24 @@ pub async fn polling_loop(
                 let cpu = proc.cpu_usage();
                 let mem = proc.memory();
                 let parent_pid = proc.parent().map(|p| p.as_u32()).unwrap_or(0);
-                let ext_conns = count_external_connections(proc);
+                let ext_conns = count_external_connections(pid_u32);
+                let disk = proc.disk_usage();
+                let disk_read = disk.read_bytes;
+                let disk_write = disk.written_bytes;
 
                 // Check tombstone for revival
                 let tomb_key = (pid_u32, exe_path.clone());
                 if let Some(tombstoned) = tombstone_map.remove(&tomb_key) {
                     // Legitimate restart — restore history
                     let mut revived = tombstoned.window;
-                    revived.update(cpu, mem, ext_conns, machine_idle_ms, window_size);
+                    revived.update(cpu, mem, ext_conns, machine_idle_ms, disk_read, disk_write);
                     active_map.insert(pid_u32, revived);
                     continue;
                 }
 
                 match active_map.get_mut(&pid_u32) {
                     Some(window) => {
-                        window.update(cpu, mem, ext_conns, machine_idle_ms, window_size);
+                        window.update(cpu, mem, ext_conns, machine_idle_ms, disk_read, disk_write);
                     }
                     None => {
                         // New process (or PID reuse — exe_path differs, tomb stays)
@@ -246,7 +333,7 @@ pub async fn polling_loop(
                             parent_pid,
                             spawn_time,
                         );
-                        window.update(cpu, mem, ext_conns, machine_idle_ms, window_size);
+                        window.update(cpu, mem, ext_conns, machine_idle_ms, disk_read, disk_write);
                         active_map.insert(pid_u32, window);
                     }
                 }

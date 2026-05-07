@@ -22,7 +22,6 @@ struct PortsConfig {
 #[derive(Debug, serde::Deserialize)]
 struct CollectorConfig {
     poll_interval_ms: u64,
-    window_size: usize,
 }
 
 #[tokio::main]
@@ -42,18 +41,20 @@ async fn main() -> Result<()> {
         Arc::new(RwLock::new(HashMap::new()));
     let tombstones: Arc<RwLock<HashMap<(u32, String), TombstonedProcess>>> =
         Arc::new(RwLock::new(HashMap::new()));
+    let system_stats: Arc<RwLock<(f32, u64, u64, u32)>> =
+        Arc::new(RwLock::new((0.0, 0, 0, 0u32)));
 
     let poll_ms = cfg.collector.poll_interval_ms;
-    let window_size = cfg.collector.window_size;
     let active_clone = active.clone();
     let tombstones_clone = tombstones.clone();
+    let system_stats_poll = system_stats.clone();
 
     tokio::spawn(async move {
-        collector::polling_loop(active_clone, tombstones_clone, poll_ms, window_size).await;
+        collector::polling_loop(active_clone, tombstones_clone, system_stats_poll, poll_ms).await;
     });
 
     let addr = format!("127.0.0.1:{}", cfg.ports.collector);
-    api::serve(active, tombstones, &addr).await?;
+    api::serve(active, tombstones, system_stats, &addr).await?;
 
     Ok(())
 }

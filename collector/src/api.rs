@@ -9,11 +9,13 @@ use crate::collector::{ProcessWindow, TombstonedProcess};
 
 type ActiveStore = Arc<RwLock<HashMap<u32, ProcessWindow>>>;
 type TombstoneStore = Arc<RwLock<HashMap<(u32, String), TombstonedProcess>>>;
+type SystemStatsStore = Arc<RwLock<(f32, u64, u64, u32)>>;
 
 #[derive(Clone)]
 struct AppState {
     active: ActiveStore,
     tombstones: TombstoneStore,
+    system_stats: SystemStatsStore,
 }
 
 // ---------------------------------------------------------------------------
@@ -25,6 +27,10 @@ struct ProcessesResponse {
     active: Vec<SnapshotOut>,
     tombstones: Vec<TombstoneOut>,
     machine_idle_ms: u64,
+    system_cpu_pct: f32,
+    system_mem_used_bytes: u64,
+    system_mem_total_bytes: u64,
+    num_cpus: u32,
 }
 
 #[derive(Serialize)]
@@ -37,13 +43,13 @@ struct SnapshotOut {
     cpu_mean: f64,
     cpu_std: f64,
     cpu_current: f32,
-    mem_mean: f64,
-    mem_std: f64,
     mem_current: u64,
     external_connections: u32,
     machine_idle_ms: u64,
     sample_count: u64,
     tombstoned: bool,
+    disk_read_bytes: u64,
+    disk_write_bytes: u64,
 }
 
 #[derive(Serialize)]
@@ -56,14 +62,13 @@ struct TombstoneOut {
     cpu_mean: f64,
     cpu_std: f64,
     cpu_current: f32,
-    mem_mean: f64,
-    mem_std: f64,
     mem_current: u64,
     external_connections: u32,
     machine_idle_ms: u64,
     sample_count: u64,
     tombstoned: bool,
-    died_at: u64,
+    disk_read_bytes: u64,
+    disk_write_bytes: u64,
 }
 
 fn window_to_snapshot(w: &ProcessWindow) -> SnapshotOut {
@@ -76,13 +81,13 @@ fn window_to_snapshot(w: &ProcessWindow) -> SnapshotOut {
         cpu_mean: w.cpu_mean,
         cpu_std: w.cpu_std,
         cpu_current: w.cpu_current,
-        mem_mean: w.mem_mean,
-        mem_std: w.mem_std,
         mem_current: w.mem_current,
         external_connections: w.external_connections,
         machine_idle_ms: w.machine_idle_ms,
         sample_count: w.sample_count,
         tombstoned: false,
+        disk_read_bytes: w.disk_read_bytes,
+        disk_write_bytes: w.disk_write_bytes,
     }
 }
 
@@ -97,14 +102,13 @@ fn tombstone_to_out(ts: &TombstonedProcess) -> TombstoneOut {
         cpu_mean: w.cpu_mean,
         cpu_std: w.cpu_std,
         cpu_current: w.cpu_current,
-        mem_mean: w.mem_mean,
-        mem_std: w.mem_std,
         mem_current: w.mem_current,
         external_connections: w.external_connections,
         machine_idle_ms: w.machine_idle_ms,
         sample_count: w.sample_count,
         tombstoned: true,
-        died_at: ts.died_at,
+        disk_read_bytes: w.disk_read_bytes,
+        disk_write_bytes: w.disk_write_bytes,
     }
 }
 
@@ -115,6 +119,8 @@ fn tombstone_to_out(ts: &TombstonedProcess) -> TombstoneOut {
 async fn get_processes(State(state): State<AppState>) -> Json<ProcessesResponse> {
     let active_map = state.active.read().await;
     let tombstone_map = state.tombstones.read().await;
+    let (system_cpu_pct, system_mem_used_bytes, system_mem_total_bytes, num_cpus) =
+        *state.system_stats.read().await;
 
     let active_snapshots: Vec<SnapshotOut> = active_map.values().map(window_to_snapshot).collect();
 
@@ -132,6 +138,10 @@ async fn get_processes(State(state): State<AppState>) -> Json<ProcessesResponse>
         active: active_snapshots,
         tombstones: tombstone_snapshots,
         machine_idle_ms,
+        system_cpu_pct,
+        system_mem_used_bytes,
+        system_mem_total_bytes,
+        num_cpus,
     })
 }
 
@@ -146,9 +156,10 @@ async fn health() -> Json<Value> {
 pub async fn serve(
     active: ActiveStore,
     tombstones: TombstoneStore,
+    system_stats: SystemStatsStore,
     addr: &str,
 ) -> anyhow::Result<()> {
-    let state = AppState { active, tombstones };
+    let state = AppState { active, tombstones, system_stats };
 
     let app = Router::new()
         .route("/processes", get(get_processes))
