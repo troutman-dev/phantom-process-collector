@@ -1,0 +1,38 @@
+name: Enhancement
+description: Improve an existing behavior
+title: "[Enhancement]: "
+labels: ["type: enhancement"]
+body:
+  - type: input
+    id: area
+    attributes:
+      label: Area
+      description: What part of the project should be improved?
+      placeholder: defender, attacker, orchestrator, docs, scripts, etc.
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current Behavior
+      description: What happens today?
+      placeholder: Briefly describe current behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: improvement
+    attributes:
+      label: Proposed Enhancement
+      description: What improvement do you want?
+      placeholder: Briefly describe the change
+    validations:
+      required: true
+
+  - type: textarea
+    id: value
+    attributes:
+      label: Why This Helps
+      description: What value does this provide?
+      placeholder: Optional

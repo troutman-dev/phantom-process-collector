@@ -1,0 +1,41 @@
+name: Documentation Issue
+description: Report missing, unclear, or incorrect docs
+title: "[Docs]: "
+labels: ["type: docs"]
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Doc Location
+      description: Which file/page/section is affected?
+      placeholder: README.md, scripts/install-prereqs.sh section, etc.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: issue_type
+    attributes:
+      label: Issue Type
+      options:
+        - missing content
+        - outdated content
+        - unclear explanation
+        - typo/grammar
+    validations:
+      required: true
+
+  - type: textarea
+    id: details
+    attributes:
+      label: What Is Wrong
+      description: Describe the documentation issue
+      placeholder: Explain what is missing or incorrect
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggested
+    attributes:
+      label: Suggested Fix
+      description: How should this be updated?
+      placeholder: Optional
