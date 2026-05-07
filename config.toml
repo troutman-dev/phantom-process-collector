@@ -1,0 +1,16 @@
+[ports]
+collector = 7070
+scorer    = 8008
+dashboard = 5173
+
+[collector]
+poll_interval_ms = 2000
+window_size      = 300     # 300 samples × 2s = 10 min of history
+
+[scorer]
+update_interval_s        = 3
+phantom_threshold_high   = 70
+phantom_threshold_medium = 40
+
+[logging]
+level = "info"
