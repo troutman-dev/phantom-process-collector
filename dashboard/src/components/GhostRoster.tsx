@@ -20,6 +20,13 @@ function formatAge(spawnTimeUnix: number): string {
   return `${Math.floor(seconds / 86400)}d`;
 }
 
+// process_age_days signal contribution = WEIGHT(0.4) * min(age_days, 30)
+// so raw age_days = contribution / 0.4
+function spawnTimeFromContribution(ageDaysContribution: number): number {
+  const ageDays = ageDaysContribution / 0.4;
+  return Math.floor(Date.now() / 1000 - ageDays * 86400);
+}
+
 function LineageDrawer({ node }: { node: LineageNode }) {
   return (
     <div className="ml-4 border-l-2 border-gray-300 pl-3">
@@ -123,7 +130,9 @@ export default function GhostRoster({ entries }: Props) {
                 </td>
                 <td className="px-3 py-2 text-gray-700">{entry.signalContributions?.external_connections?.toFixed(1) ?? "—"}</td>
                 <td className="px-3 py-2 text-gray-500 font-mono text-xs">
-                  {formatAge(0)}
+                  {entry.signalContributions?.process_age_days != null
+                    ? formatAge(spawnTimeFromContribution(entry.signalContributions.process_age_days))
+                    : "—"}
                 </td>
                 <td className="px-3 py-2">
                   {trustedPids.has(entry.pid) || entry.trusted ? (

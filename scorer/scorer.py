@@ -4,6 +4,17 @@ import tomllib
 
 PRIOR = -0.5
 
+# Load scoring thresholds from config once at module import time.
+def _load_thresholds() -> tuple[float, float]:
+    try:
+        with open("../config.toml", "rb") as f:
+            cfg = tomllib.load(f)
+        return cfg["scorer"]["phantom_threshold_high"], cfg["scorer"]["phantom_threshold_medium"]
+    except Exception:
+        return 70.0, 40.0
+
+_THRESHOLD_HIGH, _THRESHOLD_MEDIUM = _load_thresholds()
+
 WEIGHTS = {
     # Positive — evidence of ghostliness
     "cpu_activity_while_idle": +0.2,
@@ -115,13 +126,9 @@ def score(snapshot, all_pids: set[int], pid_to_name: dict[int, str]):
     contributions = {k: WEIGHTS[k] * v for k, v in signals.items()}
     phantom_index = sigmoid(PRIOR + sum(contributions.values())) * 100.0
 
-    with open("../config.toml", "rb") as f:
-        cfg = tomllib.load(f)
-    hi = cfg["scorer"]["phantom_threshold_high"]
-    mid = cfg["scorer"]["phantom_threshold_medium"]
     bucket = (
-        "investigate" if phantom_index >= hi
-        else "watch" if phantom_index >= mid
+        "investigate" if phantom_index >= _THRESHOLD_HIGH
+        else "watch" if phantom_index >= _THRESHOLD_MEDIUM
         else "normal"
     )
 
