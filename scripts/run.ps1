@@ -1,7 +1,11 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path $PSScriptRoot -Parent
+$logDir = Join-Path $root "logs"
+New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+try { Stop-Transcript } catch { }
+$null = Start-Transcript -Path (Join-Path $logDir "run.log") -Force
 
 # ---------------------------------------------------------------------------
 # 1. Parse ports from config.toml
@@ -19,13 +23,13 @@ $collectorPort = Get-TomlPort $configText "collector"
 $scorerPort    = Get-TomlPort $configText "scorer"
 $dashboardPort = Get-TomlPort $configText "dashboard"
 
-Write-Host "Ports — collector:$collectorPort  scorer:$scorerPort  dashboard:$dashboardPort" -ForegroundColor Cyan
+Write-Host "Ports - collector:$collectorPort  scorer:$scorerPort  dashboard:$dashboardPort" -ForegroundColor Cyan
 
 # ---------------------------------------------------------------------------
 # 2. Check that all three ports are free
 # ---------------------------------------------------------------------------
 foreach ($port in @($collectorPort, $scorerPort, $dashboardPort)) {
-    $bound = netstat -ano | Select-String ":$port\s"
+    $bound = netstat -ano | Select-String ":$port\s+.*LISTENING"
     if ($bound) {
         Write-Host "Port $port is already in use. Run .\scripts\reset.ps1 first." -ForegroundColor Red
         exit 1
@@ -35,6 +39,11 @@ foreach ($port in @($collectorPort, $scorerPort, $dashboardPort)) {
 # ---------------------------------------------------------------------------
 # 3. Build collector
 # ---------------------------------------------------------------------------
+# Kill any lingering collector process before building — cargo cannot overwrite
+# a running executable on Windows.
+Get-Process -Name "collector" -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Milliseconds 500
+
 Write-Host "`nBuilding collector..." -ForegroundColor Cyan
 Push-Location (Join-Path $root "collector")
 cargo build --release
@@ -46,7 +55,8 @@ Pop-Location
 # ---------------------------------------------------------------------------
 $collectorExe = Join-Path $root "collector\target\release\collector.exe"
 Write-Host "Starting collector..." -ForegroundColor Cyan
-$collectorJob = Start-Process -FilePath $collectorExe -WorkingDirectory $root -PassThru -WindowStyle Hidden
+$collectorJob = Start-Process -FilePath $collectorExe -WorkingDirectory $root -PassThru -WindowStyle Hidden `
+    -RedirectStandardError (Join-Path $logDir "collector.log")
 
 # ---------------------------------------------------------------------------
 # 5. Poll collector /health (max 10 s)
@@ -67,7 +77,7 @@ Write-Host "  Collector ready." -ForegroundColor Green
 # 6. Write dashboard/.env
 # ---------------------------------------------------------------------------
 $envFile = Join-Path $root "dashboard\.env"
-"VITE_SCORER_URL=http://localhost:$scorerPort" | Set-Content $envFile
+"VITE_SCORER_URL=http://localhost:$scorerPort`nVITE_DASHBOARD_PORT=$dashboardPort" | Set-Content $envFile
 Write-Host "Wrote $envFile" -ForegroundColor Cyan
 
 # ---------------------------------------------------------------------------
@@ -99,7 +109,8 @@ Write-Host "  Scorer ready." -ForegroundColor Green
 Write-Host "Starting dashboard..." -ForegroundColor Cyan
 $dashboardDir = Join-Path $root "dashboard"
 Push-Location $dashboardDir
+fnm env --use-on-cd | Out-String | Invoke-Expression
 fnm use
 npm install
 Start-Process "http://localhost:$dashboardPort"
-npm run dev
+try { npm run dev } finally { Pop-Location }
