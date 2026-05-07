@@ -1,27 +1,15 @@
-export interface ProcessSnapshot {
-  pid: number;
-  name: string;
-  exePath: string;
-  parentPid: number;
-  cpuMean: number;
-  cpuStd: number;
-  cpuCurrent: number;
-  memMean: number;
-  memStd: number;
-  memCurrent: number;
-  externalConnections: number;
-  spawnTimeUnix: number;
-  machineIdleMs: number;
-  sampleCount: number;
-  tombstoned: boolean;
-}
-
 export interface ProcessScore {
   pid: number;
   name: string;
   exePath: string;
   parentPid: number;
   parentName: string;
+  spawnTimeUnix: number;
+  cpuCurrent: number;
+  memCurrent: number;
+  diskReadBytes: number;
+  diskWriteBytes: number;
+  externalConnections: number;
   phantomIndex: number;
   signalContributions: Record<string, number>;
   bucket: "investigate" | "watch" | "normal";
@@ -36,4 +24,11 @@ export interface LineageNode {
   name: string;
   phantomIndex: number;
   children: LineageNode[];
+}
+
+export interface SystemStats {
+  systemCpuPct: number;
+  systemMemUsedBytes: number;
+  systemMemTotalBytes: number;
+  numCpus: number;
 }
