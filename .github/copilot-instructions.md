@@ -42,6 +42,7 @@ In-memory only — resets on restart.
   exactly (snake_case → camelCase)
 - CORS on scorer: localhost:5173 only, never "*"
 - /roster returns top 50 sorted by phantom_index desc
+- /scores returns all ProcessScore objects unordered — used by Timeline
 - Scoring logic only in scorer.py — not in api.py, not in collector
 
 ## Do Not
