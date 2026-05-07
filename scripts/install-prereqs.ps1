@@ -6,7 +6,9 @@ function Install-Tool {
     param($id, $name)
     Write-Host "  Installing $name..." -ForegroundColor Cyan
     winget install --id $id --silent --accept-package-agreements --accept-source-agreements
-    if ($LASTEXITCODE -ne 0) { Write-Host "  Failed to install $name." -ForegroundColor Red; exit 1 }
+    # 0 = success; -1978335189 (0x8A15002B) = no upgrade available; -1978335215 (0x8A15000F) = already installed
+    $ok = @(0, -1978335189, -1978335215)
+    if ($LASTEXITCODE -notin $ok) { Write-Host "  Failed to install $name. (exit $LASTEXITCODE)" -ForegroundColor Red; exit 1 }
 }
 function Refresh-Path {
     $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" +
@@ -14,7 +16,7 @@ function Refresh-Path {
 }
 
 Write-Host "`nPhantom -- Prerequisite Installer" -ForegroundColor White
-Write-Host "──────────────────────────────────"
+Write-Host "----------------------------------"
 
 if (-not (Test-Command "winget")) {
     Write-Host "winget not found. Install App Installer from the Microsoft Store." -ForegroundColor Red; exit 1
