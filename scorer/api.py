@@ -23,6 +23,12 @@ with open("../config.toml", "rb") as _f:
 COLLECTOR_URL = f"http://127.0.0.1:{_config['ports']['collector']}"
 _UPDATE_INTERVAL_S: int = _config["scorer"]["update_interval_s"]
 
+# Push thresholds into scorer so config.toml is opened exactly once.
+scorer_module.set_thresholds(
+    _config["scorer"]["phantom_threshold_high"],
+    _config["scorer"]["phantom_threshold_medium"],
+)
+
 # ---------------------------------------------------------------------------
 # Logging — configured once, respects config.toml [logging] level
 # ---------------------------------------------------------------------------
@@ -67,6 +73,8 @@ app.add_middleware(
 _score_cache: list[ProcessScore] = []
 _cache_timestamp: float = 0.0
 _CACHE_TTL_S = 10.0
+_LINEAGE_MAX_DEPTH = 10
+_LINEAGE_MAX_NODES = 200
 _system_stats_cache: SystemStats = SystemStats(
     system_cpu_pct=0.0,
     system_mem_used_bytes=0,
@@ -224,15 +232,18 @@ async def get_lineage(pid: int):
     if pid not in pid_to_score:
         raise HTTPException(status_code=404, detail="PID not found")
 
-    def build_node(current_pid: int, visited: set[int]) -> LineageNode:
-        if current_pid in visited:
-            # Guard against cycles
-            s = pid_to_score[current_pid]
+    node_count = 0
+
+    def build_node(current_pid: int, visited: set[int], depth: int = 0) -> LineageNode:
+        nonlocal node_count
+        node_count += 1
+        s = pid_to_score[current_pid]
+        if current_pid in visited or depth >= _LINEAGE_MAX_DEPTH or node_count > _LINEAGE_MAX_NODES:
+            # Guard against cycles, excessive depth, or runaway node count.
             return LineageNode(pid=s.pid, name=s.name, phantom_index=s.phantom_index)
         visited = visited | {current_pid}
-        s = pid_to_score[current_pid]
         children = [
-            build_node(child.pid, visited)
+            build_node(child.pid, visited, depth + 1)
             for child in pid_to_score.values()
             if child.parent_pid == current_pid and child.pid != current_pid
         ]
