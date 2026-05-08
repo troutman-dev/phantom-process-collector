@@ -51,15 +51,33 @@ KNOWN_SYSTEM_PROCESSES = {
 
 # Well-known interactive user applications that legitimately hold many
 # external TCP connections. Scored normally but receive a negative offset.
-KNOWN_USER_APPS = {
+# Defaults — overridden at startup by configure() when config.toml supplies
+# [scorer.signals] known_user_apps / known_system_parents.
+KNOWN_USER_APPS: set[str] = {
     "firefox.exe", "chrome.exe", "msedge.exe",
     "brave.exe", "opera.exe", "vivaldi.exe", "iexplore.exe",
 }
 
-KNOWN_SYSTEM_PARENTS = {
+KNOWN_SYSTEM_PARENTS: set[str] = {
     "services.exe", "svchost.exe", "explorer.exe", "wininit.exe",
     "winlogon.exe", "lsass.exe", "csrss.exe", "smss.exe", "System", "Registry"
 }
+
+
+def configure(
+    known_user_apps: set[str] | None = None,
+    known_system_parents: set[str] | None = None,
+) -> None:
+    """Override configurable signal sets with values from config.toml.
+
+    Called once by api.py at startup.  Either argument may be omitted (or
+    None) to keep the built-in default for that set.
+    """
+    global KNOWN_USER_APPS, KNOWN_SYSTEM_PARENTS
+    if known_user_apps is not None:
+        KNOWN_USER_APPS = known_user_apps
+    if known_system_parents is not None:
+        KNOWN_SYSTEM_PARENTS = known_system_parents
 
 SYSTEM_PATH_PREFIXES = (
     "c:\\windows\\system32\\",
