@@ -2,13 +2,15 @@ import asyncio
 import logging
 import logging.handlers
 import os
+import re
+import secrets
 import time
 import tomllib
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from models import LineageNode, ProcessScore, ProcessSnapshot, SystemStats
 import scorer as scorer_module
@@ -47,6 +49,30 @@ logging.basicConfig(
 )
 
 _logger = logging.getLogger("api")
+
+# ---------------------------------------------------------------------------
+# Trust token — loaded (or generated) once at startup
+# ---------------------------------------------------------------------------
+
+_token_path = os.path.join(_logs_dir, "trust_token.txt")
+
+def _load_or_create_trust_token() -> str:
+    try:
+        with open(_token_path) as _tf:
+            token = _tf.read().strip()
+        if token:
+            _logger.info("Loaded trust token from %s", _token_path)
+            return token
+    except FileNotFoundError:
+        pass
+    token = secrets.token_hex(32)
+    with open(_token_path, "w") as _tf:
+        _tf.write(token)
+    _logger.info("Generated new trust token → %s", _token_path)
+    return token
+
+_TRUST_TOKEN: str = _load_or_create_trust_token()
+
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
@@ -250,6 +276,21 @@ async def get_lineage(pid: int):
 class TrustRequest(BaseModel):
     exe_path: str
 
+    @field_validator("exe_path")
+    @classmethod
+    def validate_exe_path(cls, v: str) -> str:
+        if not v:
+            raise ValueError("exe_path must not be empty")
+        if len(v) > 512:
+            raise ValueError("exe_path must be ≤ 512 characters")
+        if "\x00" in v:
+            raise ValueError("exe_path must not contain null bytes")
+        if any(part == ".." for part in re.split(r"[/\\]", v)):
+            raise ValueError("exe_path must not contain path traversal sequences")
+        if not (re.match(r"^[A-Za-z]:[/\\]", v) or v.startswith("/") or v.startswith("\\\\")):
+            raise ValueError("exe_path must be an absolute path")
+        return v
+
 
 @app.get("/system", response_model=SystemStats, response_model_by_alias=True)
 async def get_system():
@@ -257,6 +298,11 @@ async def get_system():
 
 
 @app.post("/trust")
-async def trust_process(body: TrustRequest):
+async def trust_process(
+    body: TrustRequest,
+    x_trust_token: str | None = Header(default=None),
+):
+    if x_trust_token != _TRUST_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid or missing trust token")
     scorer_module.TRUSTED_PATHS.add(body.exe_path.lower())
     return {"trusted": body.exe_path}

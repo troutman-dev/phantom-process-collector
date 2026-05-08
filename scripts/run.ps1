@@ -8,7 +8,17 @@ try { Stop-Transcript } catch { }
 $null = Start-Transcript -Path (Join-Path $logDir "run.log") -Force
 
 # ---------------------------------------------------------------------------
-# 1. Parse ports from config.toml
+# 1a. Generate trust token — written to logs/trust_token.txt so the scorer
+#     can load it, and injected into dashboard/.env as VITE_TRUST_TOKEN.
+# ---------------------------------------------------------------------------
+$tokenBytes = [System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
+$trustToken = ([System.BitConverter]::ToString($tokenBytes)).Replace("-", "").ToLower()
+$tokenFile = Join-Path $logDir "trust_token.txt"
+[System.IO.File]::WriteAllText($tokenFile, $trustToken)
+Write-Host "Trust token written to $tokenFile" -ForegroundColor Cyan
+
+# ---------------------------------------------------------------------------
+# 1b. Parse ports from config.toml
 # ---------------------------------------------------------------------------
 $configPath = Join-Path $root "config.toml"
 $configText  = Get-Content $configPath -Raw
@@ -77,7 +87,7 @@ Write-Host "  Collector ready." -ForegroundColor Green
 # 6. Write dashboard/.env
 # ---------------------------------------------------------------------------
 $envFile = Join-Path $root "dashboard\.env"
-"VITE_SCORER_URL=http://localhost:$scorerPort`nVITE_DASHBOARD_PORT=$dashboardPort" | Set-Content $envFile
+"VITE_SCORER_URL=http://localhost:$scorerPort`nVITE_DASHBOARD_PORT=$dashboardPort`nVITE_TRUST_TOKEN=$trustToken" | Set-Content $envFile
 Write-Host "Wrote $envFile" -ForegroundColor Cyan
 
 # ---------------------------------------------------------------------------
