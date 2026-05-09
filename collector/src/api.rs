@@ -9,7 +9,7 @@ use crate::collector::{ProcessWindow, TombstonedProcess};
 
 type ActiveStore = Arc<RwLock<HashMap<u32, ProcessWindow>>>;
 type TombstoneStore = Arc<RwLock<HashMap<(u32, String), TombstonedProcess>>>;
-type SystemStatsStore = Arc<RwLock<(f32, u64, u64, u32)>>;
+type SystemStatsStore = Arc<RwLock<(f32, u64, u64, u32, u64)>>;
 
 #[derive(Clone)]
 struct AppState {
@@ -119,17 +119,10 @@ fn tombstone_to_out(ts: &TombstonedProcess) -> TombstoneOut {
 async fn get_processes(State(state): State<AppState>) -> Json<ProcessesResponse> {
     let active_map = state.active.read().await;
     let tombstone_map = state.tombstones.read().await;
-    let (system_cpu_pct, system_mem_used_bytes, system_mem_total_bytes, num_cpus) =
+    let (system_cpu_pct, system_mem_used_bytes, system_mem_total_bytes, num_cpus, machine_idle_ms) =
         *state.system_stats.read().await;
 
     let active_snapshots: Vec<SnapshotOut> = active_map.values().map(window_to_snapshot).collect();
-
-    // Collect machine_idle_ms from the most-recently updated active process
-    let machine_idle_ms = active_map
-        .values()
-        .next()
-        .map(|w| w.machine_idle_ms)
-        .unwrap_or(0);
 
     let tombstone_snapshots: Vec<TombstoneOut> =
         tombstone_map.values().map(tombstone_to_out).collect();
