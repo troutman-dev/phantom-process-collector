@@ -104,7 +104,15 @@ if (-not $ready) { Write-Host "Scorer did not become ready in 10 s." -Foreground
 Write-Host "  Scorer ready." -ForegroundColor Green
 
 # ---------------------------------------------------------------------------
-# 9. Start dashboard (opens browser)
+# 9. Save PIDs so reset.ps1 can stop only project-owned processes
+# ---------------------------------------------------------------------------
+# Note: Start-Process -PassThru returns a System.Diagnostics.Process object;
+# .Id is the OS process ID, not a PowerShell job ID.
+$pidFile = Join-Path $logDir "phantom.pids"
+@{ scorer = $scorerJob.Id } | ConvertTo-Json | Set-Content $pidFile
+
+# ---------------------------------------------------------------------------
+# 10. Start dashboard (opens browser)
 # ---------------------------------------------------------------------------
 Write-Host "Starting dashboard..." -ForegroundColor Cyan
 $dashboardDir = Join-Path $root "dashboard"
