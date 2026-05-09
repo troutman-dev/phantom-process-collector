@@ -8,6 +8,11 @@ Phantom answers one question: **which processes on this machine have no plausibl
 - [Python 3.11+](https://www.python.org/) with [uv](https://github.com/astral-sh/uv)
 - [Node.js](https://nodejs.org/) (via [fnm](https://github.com/Schniz/fnm) or installed directly)
 
+Prerequisites can be installed using 
+```
+.\scripts\install-prereqs.ps1
+```
+
 ### Running
 ```powershell
 .\scripts\run.ps1
