@@ -111,6 +111,6 @@ $dashboardDir = Join-Path $root "dashboard"
 Push-Location $dashboardDir
 fnm env --use-on-cd | Out-String | Invoke-Expression
 fnm use
-npm install
+if (-not (Test-Path "node_modules")) { npm install }
 Start-Process "http://localhost:$dashboardPort"
 try { npm run dev } finally { Pop-Location }
