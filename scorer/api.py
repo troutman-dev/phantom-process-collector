@@ -90,6 +90,12 @@ async def _fetch_and_score() -> list[ProcessScore]:
             resp.raise_for_status()
             data = resp.json()
     except Exception:
+        _logger.error(
+            "Failed to fetch or parse collector response from %s/processes — "
+            "returning empty list. Check collector availability and payload format.",
+            COLLECTOR_URL,
+            exc_info=True,
+        )
         return []
 
     global _system_stats_cache
@@ -109,6 +115,14 @@ async def _fetch_and_score() -> list[ProcessScore]:
         try:
             snapshots.append(ProcessSnapshot(**item))
         except Exception:
+            _logger.warning(
+                "Skipping malformed process snapshot — could not parse into ProcessSnapshot. "
+                "pid=%s name=%s exe_path=%s",
+                item.get("pid", "<missing>"),
+                item.get("name", "<missing>"),
+                item.get("exe_path", "<missing>"),
+                exc_info=True,
+            )
             continue
 
     all_pids: set[int] = {s.pid for s in snapshots}
