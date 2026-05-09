@@ -58,7 +58,7 @@ KNOWN_USER_APPS = {
 
 KNOWN_SYSTEM_PARENTS = {
     "services.exe", "svchost.exe", "explorer.exe", "wininit.exe",
-    "winlogon.exe", "lsass.exe", "csrss.exe", "smss.exe", "System", "Registry"
+    "winlogon.exe", "lsass.exe", "csrss.exe", "smss.exe", "system", "registry"
 }
 
 SYSTEM_PATH_PREFIXES = (
