@@ -125,10 +125,9 @@ async def _fetch_and_score() -> list[ProcessScore]:
     )
     if zero_spawn:
         _logger.warning(
-            "spawn_time_unix=0 for %d processes — process_age_days signal fires at MAX (+%.1f). "
-            "Examples: %s",
+            "spawn_time_unix=0 for %d processes — process_age_days signal is neutral (0.0); "
+            "spawn time unknown. Examples: %s",
             len(zero_spawn),
-            scorer_module.WEIGHTS["process_age_days"] * 30,
             ", ".join(f"{s.name}(pid={s.pid})" for s in zero_spawn[:5]),
         )
     if empty_exe:
