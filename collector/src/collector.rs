@@ -88,9 +88,10 @@ fn is_internal(addr: &IpAddr) -> bool {
     }
 }
 
-/// Count external TCP connections for a process using GetExtendedTcpTable.
-/// Covers both IPv4 (AF_INET) and IPv6 (AF_INET6). Returns 0 on non-Windows.
-fn count_external_connections(pid: u32) -> u32 {
+/// Build a map of PID → external TCP connection count by scanning the TCP tables
+/// once per poll tick. Covers both IPv4 (AF_INET) and IPv6 (AF_INET6).
+/// Returns an empty map on non-Windows platforms.
+fn build_connection_map() -> HashMap<u32, u32> {
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::NetworkManagement::IpHelper::{
@@ -101,7 +102,7 @@ fn count_external_connections(pid: u32) -> u32 {
         };
         use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6};
 
-        let mut count: u32 = 0;
+        let mut map: HashMap<u32, u32> = HashMap::new();
 
         unsafe {
             // --- IPv4 ---
@@ -125,14 +126,13 @@ fn count_external_connections(pid: u32) -> u32 {
                         table.table.as_ptr(),
                         table.dwNumEntries as usize,
                     );
-                    count += rows.iter()
-                        .filter(|row| row.dwOwningPid == pid)
-                        .filter(|row| {
-                            let addr = u32::from_be(row.dwRemoteAddr);
-                            let ip = std::net::Ipv4Addr::from(addr.to_be_bytes());
-                            !is_internal(&std::net::IpAddr::V4(ip))
-                        })
-                        .count() as u32;
+                    for row in rows {
+                        let addr = u32::from_be(row.dwRemoteAddr);
+                        let ip = std::net::Ipv4Addr::from(addr.to_be_bytes());
+                        if !is_internal(&std::net::IpAddr::V4(ip)) {
+                            *map.entry(row.dwOwningPid).or_insert(0) += 1;
+                        }
+                    }
                 }
             }
 
@@ -156,22 +156,21 @@ fn count_external_connections(pid: u32) -> u32 {
                         table6.table.as_ptr(),
                         table6.dwNumEntries as usize,
                     );
-                    count += rows6.iter()
-                        .filter(|row| row.dwOwningPid == pid)
-                        .filter(|row| {
-                            let ip = std::net::Ipv6Addr::from(row.ucRemoteAddr);
-                            !is_internal(&std::net::IpAddr::V6(ip))
-                        })
-                        .count() as u32;
+                    for row in rows6 {
+                        let ip = std::net::Ipv6Addr::from(row.ucRemoteAddr);
+                        if !is_internal(&std::net::IpAddr::V6(ip)) {
+                            *map.entry(row.dwOwningPid).or_insert(0) += 1;
+                        }
+                    }
                 }
             }
         }
 
-        count
+        map
     }
     #[cfg(not(target_os = "windows"))]
     {
-        0
+        HashMap::new()
     }
 }
 
@@ -288,6 +287,9 @@ pub async fn polling_loop(
         }
         let now = now_ms();
 
+        // Build PID → external-connection count once per tick (single TCP table scan).
+        let conn_map = build_connection_map();
+
         // Collect live PIDs from sysinfo
         let mut seen_pids: HashSet<u32> = HashSet::new();
 
@@ -307,7 +309,7 @@ pub async fn polling_loop(
                 let cpu = proc.cpu_usage();
                 let mem = proc.memory();
                 let parent_pid = proc.parent().map(|p| p.as_u32()).unwrap_or(0);
-                let ext_conns = count_external_connections(pid_u32);
+                let ext_conns = conn_map.get(&pid_u32).copied().unwrap_or(0);
                 let disk = proc.disk_usage();
                 let disk_read = disk.read_bytes;
                 let disk_write = disk.written_bytes;
