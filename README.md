@@ -1,6 +1,8 @@
 # phantom-process-collector
 Phantom answers one question: **which processes on this machine have no plausible reason to still be running?**  It detects *contextual orphans* — processes that are alive, consuming resources, and possibly communicating with external endpoints, but whose behavioral profile is inconsistent with any active user workflow.
 
+![Phantom Process Monitor demo](https://github.com/user-attachments/assets/fd036c8b-f692-479c-aaa8-888550f4dba8)
+
 ## Setup
 
 ### Prerequisites
