@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import logging.handlers
 import os
@@ -22,6 +23,14 @@ with open("../config.toml", "rb") as _f:
 
 COLLECTOR_URL = f"http://127.0.0.1:{_config['ports']['collector']}"
 _UPDATE_INTERVAL_S: int = _config["scorer"]["update_interval_s"]
+
+# Pass signal sets from [scorer.signals] to scorer — config.toml is the
+# single source of truth for KNOWN_USER_APPS and KNOWN_SYSTEM_PARENTS.
+_signals_cfg: dict = _config["scorer"]["signals"]
+scorer_module.configure(
+    known_user_apps=set(_signals_cfg["known_user_apps"]),
+    known_system_parents=set(_signals_cfg["known_system_parents"]),
+)
 
 # ---------------------------------------------------------------------------
 # Logging — configured once, respects config.toml [logging] level
@@ -47,11 +56,26 @@ logging.basicConfig(
 )
 
 _logger = logging.getLogger("api")
+
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="Phantom Scorer")
+
+@contextlib.asynccontextmanager
+async def _lifespan(app: FastAPI):
+    async def loop():
+        while True:
+            await _refresh_cache()
+            await asyncio.sleep(_UPDATE_INTERVAL_S)
+
+    task = asyncio.create_task(loop())
+    yield
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
+app = FastAPI(title="Phantom Scorer", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -90,6 +114,12 @@ async def _fetch_and_score() -> list[ProcessScore]:
             resp.raise_for_status()
             data = resp.json()
     except Exception:
+        _logger.error(
+            "Failed to fetch or parse collector response from %s/processes — "
+            "returning empty list. Check collector availability and payload format.",
+            COLLECTOR_URL,
+            exc_info=True,
+        )
         return []
 
     global _system_stats_cache
@@ -109,6 +139,14 @@ async def _fetch_and_score() -> list[ProcessScore]:
         try:
             snapshots.append(ProcessSnapshot(**item))
         except Exception:
+            _logger.warning(
+                "Skipping malformed process snapshot — could not parse into ProcessSnapshot. "
+                "pid=%s name=%s exe_path=%s",
+                item.get("pid", "<missing>"),
+                item.get("name", "<missing>"),
+                item.get("exe_path", "<missing>"),
+                exc_info=True,
+            )
             continue
 
     all_pids: set[int] = {s.pid for s in snapshots}
@@ -125,10 +163,9 @@ async def _fetch_and_score() -> list[ProcessScore]:
     )
     if zero_spawn:
         _logger.warning(
-            "spawn_time_unix=0 for %d processes — process_age_days signal fires at MAX (+%.1f). "
-            "Examples: %s",
+            "spawn_time_unix=0 for %d processes — process_age_days signal is neutral (0.0); "
+            "spawn time unknown. Examples: %s",
             len(zero_spawn),
-            scorer_module.WEIGHTS["process_age_days"] * 30,
             ", ".join(f"{s.name}(pid={s.pid})" for s in zero_spawn[:5]),
         )
     if empty_exe:
@@ -181,20 +218,6 @@ async def _refresh_cache():
             _score_cache = []
     finally:
         _refreshing = False
-
-
-# ---------------------------------------------------------------------------
-# Background update loop
-# ---------------------------------------------------------------------------
-
-@app.on_event("startup")
-async def start_background_loop():
-    async def loop():
-        while True:
-            await _refresh_cache()
-            await asyncio.sleep(_UPDATE_INTERVAL_S)
-
-    asyncio.create_task(loop())
 
 
 # ---------------------------------------------------------------------------
