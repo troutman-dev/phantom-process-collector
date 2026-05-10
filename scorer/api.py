@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import logging.handlers
 import os
@@ -55,11 +56,26 @@ logging.basicConfig(
 )
 
 _logger = logging.getLogger("api")
+
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="Phantom Scorer")
+
+@contextlib.asynccontextmanager
+async def _lifespan(app: FastAPI):
+    async def loop():
+        while True:
+            await _refresh_cache()
+            await asyncio.sleep(_UPDATE_INTERVAL_S)
+
+    task = asyncio.create_task(loop())
+    yield
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
+app = FastAPI(title="Phantom Scorer", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -189,20 +205,6 @@ async def _refresh_cache():
             _score_cache = []
     finally:
         _refreshing = False
-
-
-# ---------------------------------------------------------------------------
-# Background update loop
-# ---------------------------------------------------------------------------
-
-@app.on_event("startup")
-async def start_background_loop():
-    async def loop():
-        while True:
-            await _refresh_cache()
-            await asyncio.sleep(_UPDATE_INTERVAL_S)
-
-    asyncio.create_task(loop())
 
 
 # ---------------------------------------------------------------------------
