@@ -106,6 +106,7 @@ Json(ProcessesResponse {
     system_mem_total_bytes,
     num_cpus,
 })
+}
 
 async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
