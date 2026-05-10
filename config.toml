@@ -11,5 +11,15 @@ update_interval_s        = 3
 phantom_threshold_high   = 70
 phantom_threshold_medium = 40
 
+[scorer.signals]
+known_user_apps = [
+    "firefox.exe", "chrome.exe", "msedge.exe",
+    "brave.exe", "opera.exe", "vivaldi.exe", "iexplore.exe",
+]
+known_system_parents = [
+    "services.exe", "svchost.exe", "explorer.exe", "wininit.exe",
+    "winlogon.exe", "lsass.exe", "csrss.exe", "smss.exe", "System", "Registry",
+]
+
 [logging]
 level = "info"

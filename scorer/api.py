@@ -23,6 +23,14 @@ with open("../config.toml", "rb") as _f:
 COLLECTOR_URL = f"http://127.0.0.1:{_config['ports']['collector']}"
 _UPDATE_INTERVAL_S: int = _config["scorer"]["update_interval_s"]
 
+# Pass signal sets from [scorer.signals] to scorer — config.toml is the
+# single source of truth for KNOWN_USER_APPS and KNOWN_SYSTEM_PARENTS.
+_signals_cfg: dict = _config["scorer"]["signals"]
+scorer_module.configure(
+    known_user_apps=set(_signals_cfg["known_user_apps"]),
+    known_system_parents=set(_signals_cfg["known_system_parents"]),
+)
+
 # ---------------------------------------------------------------------------
 # Logging — configured once, respects config.toml [logging] level
 # ---------------------------------------------------------------------------
