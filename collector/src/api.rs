@@ -9,7 +9,7 @@ use crate::collector::{ProcessWindow, TombstonedProcess};
 
 type ActiveStore = Arc<RwLock<HashMap<u32, ProcessWindow>>>;
 type TombstoneStore = Arc<RwLock<HashMap<(u32, String), TombstonedProcess>>>;
-type SystemStatsStore = Arc<RwLock<(f32, u64, u64, u32)>>;
+type SystemStatsStore = Arc<RwLock<(f32, u64, u64, u32, u64)>>;
 
 #[derive(Clone)]
 struct AppState {
@@ -79,33 +79,33 @@ fn process_out(w: &ProcessWindow, tombstoned: bool) -> ProcessOut {
 async fn get_processes(State(state): State<AppState>) -> Json<ProcessesResponse> {
     let active_map = state.active.read().await;
     let tombstone_map = state.tombstones.read().await;
-    let (system_cpu_pct, system_mem_used_bytes, system_mem_total_bytes, num_cpus) =
+    let (system_cpu_pct, system_mem_used_bytes, system_mem_total_bytes, num_cpus, machine_idle_ms) =
         *state.system_stats.read().await;
 
     let active_snapshots: Vec<ProcessOut> =
         active_map.values().map(|w| process_out(w, false)).collect();
 
-    // Collect machine_idle_ms from the most-recently updated active process
-    let machine_idle_ms = active_map
-        .values()
-        .next()
-        .map(|w| w.machine_idle_ms)
-        .unwrap_or(0);
+// Collect machine_idle_ms from the most-recently updated active process
+let machine_idle_ms = active_map
+    .values()
+    .next()
+    .map(|w| w.machine_idle_ms)
+    .unwrap_or(0);
 
-    let tombstone_snapshots: Vec<ProcessOut> = tombstone_map
-        .values()
-        .map(|ts| process_out(&ts.window, true))
-        .collect();
+let tombstone_snapshots: Vec<ProcessOut> = tombstone_map
+    .values()
+    .map(|ts| process_out(&ts.window, true))
+    .collect();
 
-    Json(ProcessesResponse {
-        active: active_snapshots,
-        tombstones: tombstone_snapshots,
-        machine_idle_ms,
-        system_cpu_pct,
-        system_mem_used_bytes,
-        system_mem_total_bytes,
-        num_cpus,
-    })
+Json(ProcessesResponse {
+    active: active_snapshots,
+    tombstones: tombstone_snapshots,
+    machine_idle_ms,
+    system_cpu_pct,
+    system_mem_used_bytes,
+    system_mem_total_bytes,
+    num_cpus,
+})
 }
 
 async fn health() -> Json<Value> {

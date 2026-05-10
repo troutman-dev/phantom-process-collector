@@ -238,7 +238,7 @@ impl ProcessWindow {
 pub async fn polling_loop(
     active: Arc<RwLock<HashMap<u32, ProcessWindow>>>,
     tombstones: Arc<RwLock<HashMap<(u32, String), TombstonedProcess>>>,
-    system_stats: Arc<RwLock<(f32, u64, u64, u32)>>,
+    system_stats: Arc<RwLock<(f32, u64, u64, u32, u64)>>,
     poll_interval_ms: u64,
 ) {
     let mut ticker = interval(Duration::from_millis(poll_interval_ms));
@@ -280,12 +280,12 @@ pub async fn polling_loop(
         #[cfg(not(target_os = "windows"))]
         let cpu_pct = sys.cpus().iter().map(|c| c.cpu_usage()).sum::<f32>() / cpu_count as f32;
 
+        let machine_idle_ms = get_machine_idle_ms();
+
         {
             let mut stats = system_stats.write().await;
-            *stats = (cpu_pct, sys.used_memory(), sys.total_memory(), cpu_count);
+            *stats = (cpu_pct, sys.used_memory(), sys.total_memory(), cpu_count, machine_idle_ms);
         }
-
-        let machine_idle_ms = get_machine_idle_ms();
         let now = now_ms();
 
         // Collect live PIDs from sysinfo
