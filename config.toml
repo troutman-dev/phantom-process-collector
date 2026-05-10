@@ -4,12 +4,22 @@ scorer    = 8008
 dashboard = 5173
 
 [collector]
-poll_interval_ms = 2000
+poll_interval_ms = 1000
 
 [scorer]
-update_interval_s        = 3
+update_interval_s        = 1
 phantom_threshold_high   = 70
 phantom_threshold_medium = 40
+
+[scorer.signals]
+known_user_apps = [
+    "firefox.exe", "chrome.exe", "msedge.exe",
+    "brave.exe", "opera.exe", "vivaldi.exe", "iexplore.exe",
+]
+known_system_parents = [
+    "services.exe", "svchost.exe", "explorer.exe", "wininit.exe",
+    "winlogon.exe", "lsass.exe", "csrss.exe", "smss.exe", "system", "registry",
+]
 
 [logging]
 level = "info"

@@ -13,12 +13,12 @@ export const getRoster = (): Promise<RosterEntry[]> =>
 export const getLineage = (pid: number): Promise<LineageNode> =>
   fetch(`${BASE}/lineage/${pid}`).then(requireOk).then((r) => r.json());
 
-export const trustProcess = (exePath: string): Promise<Response> =>
+export const trustProcess = (exePath: string): Promise<void> =>
   fetch(`${BASE}/trust`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ exe_path: exePath }),
-  });
+  }).then(requireOk).then(() => undefined);
 
 export const getSystem = (): Promise<SystemStats> =>
   fetch(`${BASE}/system`).then(requireOk).then((r) => r.json());

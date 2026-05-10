@@ -124,6 +124,7 @@ export default function GhostRoster({ entries, systemStats }: Props) {
   const [lineage, setLineage] = useState<LineageNode | null>(null);
   const [selectedPid, setSelectedPid] = useState<number | null>(null);
   const [trustedPids, setTrustedPids] = useState<Set<number>>(new Set());
+  const [trustError, setTrustError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("phantomIndex");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
@@ -148,14 +149,25 @@ export default function GhostRoster({ entries, systemStats }: Props) {
 
   const handleTrust = async (e: React.MouseEvent, entry: RosterEntry) => {
     e.stopPropagation();
-    await trustProcess(entry.exePath);
-    setTrustedPids((prev) => new Set([...prev, entry.pid]));
+    try {
+      await trustProcess(entry.exePath);
+      setTrustedPids((prev) => new Set([...prev, entry.pid]));
+      setTrustError(null);
+    } catch (err) {
+      setTrustError(err instanceof Error ? err.message : "Trust request failed");
+    }
   };
 
   const COLSPAN = 12;
 
   return (
     <div className="space-y-3">
+      {trustError && (
+        <div className="flex items-center justify-between rounded-lg border border-mb-error/40 bg-mb-error/10 px-4 py-2 text-mb-error text-xs">
+          <span>Trust failed: {trustError}</span>
+          <button onClick={() => setTrustError(null)} className="ml-4 font-bold hover:opacity-70">✕</button>
+        </div>
+      )}
       {/* System utilization bar */}
       <div className="flex items-center gap-6 rounded-lg border border-mb-accent/20 bg-mb-surface px-5 py-3">
         <span className="text-mb-textSecondary uppercase tracking-wider text-xs font-semibold shrink-0">System</span>
