@@ -216,14 +216,18 @@ impl ProcessWindow {
         self.disk_read_bytes = disk_read_bytes;
         self.disk_write_bytes = disk_write_bytes;
 
-        // Welford for CPU
+        // Welford for CPU — sample variance (N-1) once we have >1 observation
         let cpu_f = cpu as f64;
         let delta_cpu = cpu_f - self.cpu_mean;
         self.sample_count += 1;
         self.cpu_mean += delta_cpu / self.sample_count as f64;
         let delta2_cpu = cpu_f - self.cpu_mean;
         self.cpu_m2 += delta_cpu * delta2_cpu;
-        self.cpu_std = (self.cpu_m2 / self.sample_count as f64).sqrt();
+        self.cpu_std = if self.sample_count > 1 {
+            (self.cpu_m2 / (self.sample_count - 1) as f64).sqrt()
+        } else {
+            0.0
+        };
     }
 }
 
