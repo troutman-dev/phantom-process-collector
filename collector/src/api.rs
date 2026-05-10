@@ -24,8 +24,8 @@ struct AppState {
 
 #[derive(Serialize)]
 struct ProcessesResponse {
-    active: Vec<SnapshotOut>,
-    tombstones: Vec<TombstoneOut>,
+    active: Vec<ProcessOut>,
+    tombstones: Vec<ProcessOut>,
     machine_idle_ms: u64,
     system_cpu_pct: f32,
     system_mem_used_bytes: u64,
@@ -34,7 +34,7 @@ struct ProcessesResponse {
 }
 
 #[derive(Serialize)]
-struct SnapshotOut {
+struct ProcessOut {
     pid: u32,
     name: String,
     exe_path: String,
@@ -52,27 +52,8 @@ struct SnapshotOut {
     disk_write_bytes: u64,
 }
 
-#[derive(Serialize)]
-struct TombstoneOut {
-    pid: u32,
-    name: String,
-    exe_path: String,
-    parent_pid: u32,
-    spawn_time_unix: u64,
-    cpu_mean: f64,
-    cpu_std: f64,
-    cpu_current: f32,
-    mem_current: u64,
-    external_connections: u32,
-    machine_idle_ms: u64,
-    sample_count: u64,
-    tombstoned: bool,
-    disk_read_bytes: u64,
-    disk_write_bytes: u64,
-}
-
-fn window_to_snapshot(w: &ProcessWindow) -> SnapshotOut {
-    SnapshotOut {
+fn process_out(w: &ProcessWindow, tombstoned: bool) -> ProcessOut {
+    ProcessOut {
         pid: w.pid,
         name: w.name.clone(),
         exe_path: w.exe_path.clone(),
@@ -85,28 +66,7 @@ fn window_to_snapshot(w: &ProcessWindow) -> SnapshotOut {
         external_connections: w.external_connections,
         machine_idle_ms: w.machine_idle_ms,
         sample_count: w.sample_count,
-        tombstoned: false,
-        disk_read_bytes: w.disk_read_bytes,
-        disk_write_bytes: w.disk_write_bytes,
-    }
-}
-
-fn tombstone_to_out(ts: &TombstonedProcess) -> TombstoneOut {
-    let w = &ts.window;
-    TombstoneOut {
-        pid: w.pid,
-        name: w.name.clone(),
-        exe_path: w.exe_path.clone(),
-        parent_pid: w.parent_pid,
-        spawn_time_unix: w.spawn_time_unix,
-        cpu_mean: w.cpu_mean,
-        cpu_std: w.cpu_std,
-        cpu_current: w.cpu_current,
-        mem_current: w.mem_current,
-        external_connections: w.external_connections,
-        machine_idle_ms: w.machine_idle_ms,
-        sample_count: w.sample_count,
-        tombstoned: true,
+        tombstoned,
         disk_read_bytes: w.disk_read_bytes,
         disk_write_bytes: w.disk_write_bytes,
     }
@@ -122,21 +82,30 @@ async fn get_processes(State(state): State<AppState>) -> Json<ProcessesResponse>
     let (system_cpu_pct, system_mem_used_bytes, system_mem_total_bytes, num_cpus, machine_idle_ms) =
         *state.system_stats.read().await;
 
-    let active_snapshots: Vec<SnapshotOut> = active_map.values().map(window_to_snapshot).collect();
+    let active_snapshots: Vec<ProcessOut> =
+        active_map.values().map(|w| process_out(w, false)).collect();
 
-    let tombstone_snapshots: Vec<TombstoneOut> =
-        tombstone_map.values().map(tombstone_to_out).collect();
+// Collect machine_idle_ms from the most-recently updated active process
+let machine_idle_ms = active_map
+    .values()
+    .next()
+    .map(|w| w.machine_idle_ms)
+    .unwrap_or(0);
 
-    Json(ProcessesResponse {
-        active: active_snapshots,
-        tombstones: tombstone_snapshots,
-        machine_idle_ms,
-        system_cpu_pct,
-        system_mem_used_bytes,
-        system_mem_total_bytes,
-        num_cpus,
-    })
-}
+let tombstone_snapshots: Vec<ProcessOut> = tombstone_map
+    .values()
+    .map(|ts| process_out(&ts.window, true))
+    .collect();
+
+Json(ProcessesResponse {
+    active: active_snapshots,
+    tombstones: tombstone_snapshots,
+    machine_idle_ms,
+    system_cpu_pct,
+    system_mem_used_bytes,
+    system_mem_total_bytes,
+    num_cpus,
+})
 
 async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))

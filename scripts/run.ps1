@@ -13,15 +13,22 @@ $null = Start-Transcript -Path (Join-Path $logDir "run.log") -Force
 $configPath = Join-Path $root "config.toml"
 $configText  = Get-Content $configPath -Raw
 
-function Get-TomlPort {
-    param($text, $key)
-    if ($text -match "(?m)^$key\s*=\s*(\d+)") { return [int]$Matches[1] }
-    throw "Could not find port '$key' in config.toml"
+function Get-TomlValue {
+    param($text, $section, $key)
+    # Isolate the [section] block (up to the next section header or EOF).
+    # The lazy .*? with a lookahead avoids stopping early on [ inside string values.
+    $secPat = "(?ms)^\[" + [regex]::Escape($section) + "\].*?(?=^\[|\z)"
+    if ($text -match $secPat) {
+        $sectionText = $Matches[0]
+        $keyPat = "(?m)^" + [regex]::Escape($key) + "\s*=\s*(\d+)"
+        if ($sectionText -match $keyPat) { return [int]$Matches[1] }
+    }
+    throw "Could not find '$key' in [$section] section of config.toml"
 }
 
-$collectorPort = Get-TomlPort $configText "collector"
-$scorerPort    = Get-TomlPort $configText "scorer"
-$dashboardPort = Get-TomlPort $configText "dashboard"
+$collectorPort = Get-TomlValue $configText "ports" "collector"
+$scorerPort    = Get-TomlValue $configText "ports" "scorer"
+$dashboardPort = Get-TomlValue $configText "ports" "dashboard"
 
 Write-Host "Ports - collector:$collectorPort  scorer:$scorerPort  dashboard:$dashboardPort" -ForegroundColor Cyan
 
@@ -111,6 +118,6 @@ $dashboardDir = Join-Path $root "dashboard"
 Push-Location $dashboardDir
 fnm env --use-on-cd | Out-String | Invoke-Expression
 fnm use
-npm install
+if (-not (Test-Path "node_modules") -or ((Get-Item "package-lock.json").LastWriteTime -gt (Get-Item "node_modules").LastWriteTime)) { npm install }
 Start-Process "http://localhost:$dashboardPort"
 try { npm run dev } finally { Pop-Location }

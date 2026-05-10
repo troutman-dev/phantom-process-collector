@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import logging.handlers
 import os
@@ -22,6 +23,14 @@ with open("../config.toml", "rb") as _f:
 
 COLLECTOR_URL = f"http://127.0.0.1:{_config['ports']['collector']}"
 _UPDATE_INTERVAL_S: int = _config["scorer"]["update_interval_s"]
+
+# Pass signal sets from [scorer.signals] to scorer — config.toml is the
+# single source of truth for KNOWN_USER_APPS and KNOWN_SYSTEM_PARENTS.
+_signals_cfg: dict = _config["scorer"]["signals"]
+scorer_module.configure(
+    known_user_apps=set(_signals_cfg["known_user_apps"]),
+    known_system_parents=set(_signals_cfg["known_system_parents"]),
+)
 
 # ---------------------------------------------------------------------------
 # Logging — configured once, respects config.toml [logging] level
@@ -47,11 +56,26 @@ logging.basicConfig(
 )
 
 _logger = logging.getLogger("api")
+
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="Phantom Scorer")
+
+@contextlib.asynccontextmanager
+async def _lifespan(app: FastAPI):
+    async def loop():
+        while True:
+            await _refresh_cache()
+            await asyncio.sleep(_UPDATE_INTERVAL_S)
+
+    task = asyncio.create_task(loop())
+    yield
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
+app = FastAPI(title="Phantom Scorer", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -181,20 +205,6 @@ async def _refresh_cache():
             _score_cache = []
     finally:
         _refreshing = False
-
-
-# ---------------------------------------------------------------------------
-# Background update loop
-# ---------------------------------------------------------------------------
-
-@app.on_event("startup")
-async def start_background_loop():
-    async def loop():
-        while True:
-            await _refresh_cache()
-            await asyncio.sleep(_UPDATE_INTERVAL_S)
-
-    asyncio.create_task(loop())
 
 
 # ---------------------------------------------------------------------------
