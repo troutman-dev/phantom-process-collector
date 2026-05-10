@@ -21,7 +21,7 @@ export default function App() {
     }
 
     fetchAll();
-    const id = setInterval(fetchAll, 3000);
+    const id = setInterval(fetchAll, 1000);
     return () => clearInterval(id);
   }, []);
 

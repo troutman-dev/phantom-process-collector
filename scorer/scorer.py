@@ -1,22 +1,22 @@
 import logging
 import math
 import time
-import tomllib
 
 logger = logging.getLogger("scorer")
 
 PRIOR = -0.15  # was -0.5 — raised to surface more borderline background processes
 
-# Load scoring thresholds from config once at module import time.
-def _load_thresholds() -> tuple[float, float]:
-    try:
-        with open("../config.toml", "rb") as f:
-            cfg = tomllib.load(f)
-        return cfg["scorer"]["phantom_threshold_high"], cfg["scorer"]["phantom_threshold_medium"]
-    except Exception:
-        return 70.0, 40.0
+# Thresholds are set once at startup by api.py via set_thresholds(); defaults
+# match config.toml values so the scorer is safe even if the setter is never called.
+_THRESHOLD_HIGH: float = 70.0
+_THRESHOLD_MEDIUM: float = 40.0
 
-_THRESHOLD_HIGH, _THRESHOLD_MEDIUM = _load_thresholds()
+
+def set_thresholds(high: float, medium: float) -> None:
+    """Receive thresholds from the single config.toml read performed by api.py."""
+    global _THRESHOLD_HIGH, _THRESHOLD_MEDIUM
+    _THRESHOLD_HIGH = high
+    _THRESHOLD_MEDIUM = medium
 
 WEIGHTS = {
     # Positive — evidence of ghostliness
@@ -49,17 +49,16 @@ KNOWN_SYSTEM_PROCESSES = {
     "audiodg.exe", "spoolsv.exe", "taskhostw.exe",
 }
 
-# Well-known interactive user applications that legitimately hold many
-# external TCP connections. Scored normally but receive a negative offset.
-KNOWN_USER_APPS = {
-    "firefox.exe", "chrome.exe", "msedge.exe",
-    "brave.exe", "opera.exe", "vivaldi.exe", "iexplore.exe",
-}
+# Populated at startup by configure() from [scorer.signals] in config.toml.
+KNOWN_USER_APPS: set[str] = set()
+KNOWN_SYSTEM_PARENTS: set[str] = set()
 
-KNOWN_SYSTEM_PARENTS = {
-    "services.exe", "svchost.exe", "explorer.exe", "wininit.exe",
-    "winlogon.exe", "lsass.exe", "csrss.exe", "smss.exe", "System", "Registry"
-}
+
+def configure(known_user_apps: set[str], known_system_parents: set[str]) -> None:
+    """Set signal sets from config.toml. Called once by api.py at startup."""
+    global KNOWN_USER_APPS, KNOWN_SYSTEM_PARENTS
+    KNOWN_USER_APPS = known_user_apps
+    KNOWN_SYSTEM_PARENTS = known_system_parents
 
 SYSTEM_PATH_PREFIXES = (
     "c:\\windows\\system32\\",

@@ -8,20 +8,40 @@ try { Stop-Transcript } catch { }
 $null = Start-Transcript -Path (Join-Path $logDir "run.log") -Force
 
 # ---------------------------------------------------------------------------
-# 1. Parse ports from config.toml
+# 1a. Generate trust token — written to logs/trust_token.txt so the scorer
+#     can load it, and injected into dashboard/.env as VITE_TRUST_TOKEN.
+# ---------------------------------------------------------------------------
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$tokenBytes = New-Object byte[] 32
+$rng.GetBytes($tokenBytes)
+$rng.Dispose()
+$trustToken = ([System.BitConverter]::ToString($tokenBytes)).Replace("-", "").ToLower()
+$tokenFile = Join-Path $logDir "trust_token.txt"
+[System.IO.File]::WriteAllText($tokenFile, $trustToken)
+Write-Host "Trust token written to $tokenFile" -ForegroundColor Cyan
+
+# ---------------------------------------------------------------------------
+# 1b. Parse ports from config.toml
 # ---------------------------------------------------------------------------
 $configPath = Join-Path $root "config.toml"
 $configText  = Get-Content $configPath -Raw
 
-function Get-TomlPort {
-    param($text, $key)
-    if ($text -match "(?m)^$key\s*=\s*(\d+)") { return [int]$Matches[1] }
-    throw "Could not find port '$key' in config.toml"
+function Get-TomlValue {
+    param($text, $section, $key)
+    # Isolate the [section] block (up to the next section header or EOF).
+    # The lazy .*? with a lookahead avoids stopping early on [ inside string values.
+    $secPat = "(?ms)^\[" + [regex]::Escape($section) + "\].*?(?=^\[|\z)"
+    if ($text -match $secPat) {
+        $sectionText = $Matches[0]
+        $keyPat = "(?m)^" + [regex]::Escape($key) + "\s*=\s*(\d+)"
+        if ($sectionText -match $keyPat) { return [int]$Matches[1] }
+    }
+    throw "Could not find '$key' in [$section] section of config.toml"
 }
 
-$collectorPort = Get-TomlPort $configText "collector"
-$scorerPort    = Get-TomlPort $configText "scorer"
-$dashboardPort = Get-TomlPort $configText "dashboard"
+$collectorPort = Get-TomlValue $configText "ports" "collector"
+$scorerPort    = Get-TomlValue $configText "ports" "scorer"
+$dashboardPort = Get-TomlValue $configText "ports" "dashboard"
 
 Write-Host "Ports - collector:$collectorPort  scorer:$scorerPort  dashboard:$dashboardPort" -ForegroundColor Cyan
 
@@ -77,7 +97,7 @@ Write-Host "  Collector ready." -ForegroundColor Green
 # 6. Write dashboard/.env
 # ---------------------------------------------------------------------------
 $envFile = Join-Path $root "dashboard\.env"
-"VITE_SCORER_URL=http://localhost:$scorerPort`nVITE_DASHBOARD_PORT=$dashboardPort" | Set-Content $envFile
+"VITE_SCORER_URL=http://localhost:$scorerPort`nVITE_DASHBOARD_PORT=$dashboardPort`nVITE_TRUST_TOKEN=$trustToken" | Set-Content $envFile
 Write-Host "Wrote $envFile" -ForegroundColor Cyan
 
 # ---------------------------------------------------------------------------
@@ -104,13 +124,21 @@ if (-not $ready) { Write-Host "Scorer did not become ready in 10 s." -Foreground
 Write-Host "  Scorer ready." -ForegroundColor Green
 
 # ---------------------------------------------------------------------------
-# 9. Start dashboard (opens browser)
+# 9. Save PIDs so reset.ps1 can stop only project-owned processes
+# ---------------------------------------------------------------------------
+# Note: Start-Process -PassThru returns a System.Diagnostics.Process object;
+# .Id is the OS process ID, not a PowerShell job ID.
+$pidFile = Join-Path $logDir "phantom.pids"
+@{ scorer = $scorerJob.Id } | ConvertTo-Json | Set-Content $pidFile
+
+# ---------------------------------------------------------------------------
+# 10. Start dashboard (opens browser)
 # ---------------------------------------------------------------------------
 Write-Host "Starting dashboard..." -ForegroundColor Cyan
 $dashboardDir = Join-Path $root "dashboard"
 Push-Location $dashboardDir
 fnm env --use-on-cd | Out-String | Invoke-Expression
 fnm use
-npm install
+if (-not (Test-Path "node_modules") -or ((Get-Item "package-lock.json").LastWriteTime -gt (Get-Item "node_modules").LastWriteTime)) { npm install }
 Start-Process "http://localhost:$dashboardPort"
 try { npm run dev } finally { Pop-Location }

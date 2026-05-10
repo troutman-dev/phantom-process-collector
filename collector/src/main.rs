@@ -41,8 +41,8 @@ async fn main() -> Result<()> {
         Arc::new(RwLock::new(HashMap::new()));
     let tombstones: Arc<RwLock<HashMap<(u32, String), TombstonedProcess>>> =
         Arc::new(RwLock::new(HashMap::new()));
-    let system_stats: Arc<RwLock<(f32, u64, u64, u32)>> =
-        Arc::new(RwLock::new((0.0, 0, 0, 0u32)));
+    let system_stats: Arc<RwLock<(f32, u64, u64, u32, u64)>> =
+        Arc::new(RwLock::new((0.0, 0, 0, 0u32, 0u64)));
 
     let poll_ms = cfg.collector.poll_interval_ms;
     let active_clone = active.clone();

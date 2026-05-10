@@ -1,14 +1,17 @@
 import asyncio
+import contextlib
 import logging
 import logging.handlers
 import os
+import re
+import secrets
 import time
 import tomllib
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from models import LineageNode, ProcessScore, ProcessSnapshot, SystemStats
 import scorer as scorer_module
@@ -22,6 +25,18 @@ with open("../config.toml", "rb") as _f:
 
 COLLECTOR_URL = f"http://127.0.0.1:{_config['ports']['collector']}"
 _UPDATE_INTERVAL_S: int = _config["scorer"]["update_interval_s"]
+
+# Push thresholds and signal sets into scorer — config.toml is opened exactly
+# once here; scorer.py never reads it directly.
+scorer_module.set_thresholds(
+    _config["scorer"]["phantom_threshold_high"],
+    _config["scorer"]["phantom_threshold_medium"],
+)
+_signals_cfg: dict = _config["scorer"]["signals"]
+scorer_module.configure(
+    known_user_apps=set(_signals_cfg["known_user_apps"]),
+    known_system_parents=set(_signals_cfg["known_system_parents"]),
+)
 
 # ---------------------------------------------------------------------------
 # Logging — configured once, respects config.toml [logging] level
@@ -47,11 +62,49 @@ logging.basicConfig(
 )
 
 _logger = logging.getLogger("api")
+
+# ---------------------------------------------------------------------------
+# Trust token — loaded (or generated) once at startup
+# ---------------------------------------------------------------------------
+
+_token_path = os.path.join(_logs_dir, "trust_token.txt")
+
+def _load_or_create_trust_token() -> str:
+    try:
+        with open(_token_path) as _tf:
+            token = _tf.read().strip()
+        if token:
+            _logger.info("Loaded trust token from %s", _token_path)
+            return token
+    except FileNotFoundError:
+        pass
+    token = secrets.token_hex(32)
+    with open(_token_path, "w") as _tf:
+        _tf.write(token)
+    _logger.info("Generated new trust token → %s", _token_path)
+    return token
+
+_TRUST_TOKEN: str = _load_or_create_trust_token()
+
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="Phantom Scorer")
+
+@contextlib.asynccontextmanager
+async def _lifespan(app: FastAPI):
+    async def loop():
+        while True:
+            await _refresh_cache()
+            await asyncio.sleep(_UPDATE_INTERVAL_S)
+
+    task = asyncio.create_task(loop())
+    yield
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
+app = FastAPI(title="Phantom Scorer", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -67,6 +120,8 @@ app.add_middleware(
 _score_cache: list[ProcessScore] = []
 _cache_timestamp: float = 0.0
 _CACHE_TTL_S = 10.0
+_LINEAGE_MAX_DEPTH = 10
+_LINEAGE_MAX_NODES = 200
 _system_stats_cache: SystemStats = SystemStats(
     system_cpu_pct=0.0,
     system_mem_used_bytes=0,
@@ -90,6 +145,12 @@ async def _fetch_and_score() -> list[ProcessScore]:
             resp.raise_for_status()
             data = resp.json()
     except Exception:
+        _logger.error(
+            "Failed to fetch or parse collector response from %s/processes — "
+            "returning empty list. Check collector availability and payload format.",
+            COLLECTOR_URL,
+            exc_info=True,
+        )
         return []
 
     global _system_stats_cache
@@ -109,6 +170,14 @@ async def _fetch_and_score() -> list[ProcessScore]:
         try:
             snapshots.append(ProcessSnapshot(**item))
         except Exception:
+            _logger.warning(
+                "Skipping malformed process snapshot — could not parse into ProcessSnapshot. "
+                "pid=%s name=%s exe_path=%s",
+                item.get("pid", "<missing>"),
+                item.get("name", "<missing>"),
+                item.get("exe_path", "<missing>"),
+                exc_info=True,
+            )
             continue
 
     all_pids: set[int] = {s.pid for s in snapshots}
@@ -125,10 +194,9 @@ async def _fetch_and_score() -> list[ProcessScore]:
     )
     if zero_spawn:
         _logger.warning(
-            "spawn_time_unix=0 for %d processes — process_age_days signal fires at MAX (+%.1f). "
-            "Examples: %s",
+            "spawn_time_unix=0 for %d processes — process_age_days signal is neutral (0.0); "
+            "spawn time unknown. Examples: %s",
             len(zero_spawn),
-            scorer_module.WEIGHTS["process_age_days"] * 30,
             ", ".join(f"{s.name}(pid={s.pid})" for s in zero_spawn[:5]),
         )
     if empty_exe:
@@ -184,20 +252,6 @@ async def _refresh_cache():
 
 
 # ---------------------------------------------------------------------------
-# Background update loop
-# ---------------------------------------------------------------------------
-
-@app.on_event("startup")
-async def start_background_loop():
-    async def loop():
-        while True:
-            await _refresh_cache()
-            await asyncio.sleep(_UPDATE_INTERVAL_S)
-
-    asyncio.create_task(loop())
-
-
-# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
@@ -224,15 +278,18 @@ async def get_lineage(pid: int):
     if pid not in pid_to_score:
         raise HTTPException(status_code=404, detail="PID not found")
 
-    def build_node(current_pid: int, visited: set[int]) -> LineageNode:
-        if current_pid in visited:
-            # Guard against cycles
-            s = pid_to_score[current_pid]
+    node_count = 0
+
+    def build_node(current_pid: int, visited: set[int], depth: int = 0) -> LineageNode:
+        nonlocal node_count
+        node_count += 1
+        s = pid_to_score[current_pid]
+        if current_pid in visited or depth >= _LINEAGE_MAX_DEPTH or node_count > _LINEAGE_MAX_NODES:
+            # Guard against cycles, excessive depth, or runaway node count.
             return LineageNode(pid=s.pid, name=s.name, phantom_index=s.phantom_index)
         visited = visited | {current_pid}
-        s = pid_to_score[current_pid]
         children = [
-            build_node(child.pid, visited)
+            build_node(child.pid, visited, depth + 1)
             for child in pid_to_score.values()
             if child.parent_pid == current_pid and child.pid != current_pid
         ]
@@ -250,6 +307,21 @@ async def get_lineage(pid: int):
 class TrustRequest(BaseModel):
     exe_path: str
 
+    @field_validator("exe_path")
+    @classmethod
+    def validate_exe_path(cls, v: str) -> str:
+        if not v:
+            raise ValueError("exe_path must not be empty")
+        if len(v) > 512:
+            raise ValueError("exe_path must be ≤ 512 characters")
+        if "\x00" in v:
+            raise ValueError("exe_path must not contain null bytes")
+        if any(part == ".." for part in re.split(r"[/\\]", v)):
+            raise ValueError("exe_path must not contain path traversal sequences")
+        if not (re.match(r"^[A-Za-z]:[/\\]", v) or v.startswith("/") or v.startswith("\\\\")):
+            raise ValueError("exe_path must be an absolute path")
+        return v
+
 
 @app.get("/system", response_model=SystemStats, response_model_by_alias=True)
 async def get_system():
@@ -257,6 +329,11 @@ async def get_system():
 
 
 @app.post("/trust")
-async def trust_process(body: TrustRequest):
+async def trust_process(
+    body: TrustRequest,
+    x_trust_token: str | None = Header(default=None),
+):
+    if x_trust_token != _TRUST_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid or missing trust token")
     scorer_module.TRUSTED_PATHS.add(body.exe_path.lower())
     return {"trusted": body.exe_path}
