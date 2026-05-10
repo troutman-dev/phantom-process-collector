@@ -11,7 +11,10 @@ $null = Start-Transcript -Path (Join-Path $logDir "run.log") -Force
 # 1a. Generate trust token — written to logs/trust_token.txt so the scorer
 #     can load it, and injected into dashboard/.env as VITE_TRUST_TOKEN.
 # ---------------------------------------------------------------------------
-$tokenBytes = [System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$tokenBytes = New-Object byte[] 32
+$rng.GetBytes($tokenBytes)
+$rng.Dispose()
 $trustToken = ([System.BitConverter]::ToString($tokenBytes)).Replace("-", "").ToLower()
 $tokenFile = Join-Path $logDir "trust_token.txt"
 [System.IO.File]::WriteAllText($tokenFile, $trustToken)
