@@ -85,14 +85,7 @@ async fn get_processes(State(state): State<AppState>) -> Json<ProcessesResponse>
     let active_snapshots: Vec<ProcessOut> =
         active_map.values().map(|w| process_out(w, false)).collect();
 
-// Collect machine_idle_ms from the most-recently updated active process
-let machine_idle_ms = active_map
-    .values()
-    .next()
-    .map(|w| w.machine_idle_ms)
-    .unwrap_or(0);
-
-let tombstone_snapshots: Vec<ProcessOut> = tombstone_map
+    let tombstone_snapshots: Vec<ProcessOut> = tombstone_map
     .values()
     .map(|ts| process_out(&ts.window, true))
     .collect();
