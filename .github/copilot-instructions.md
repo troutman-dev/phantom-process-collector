@@ -14,7 +14,7 @@ Three native Windows layers, no containers:
 Data flow: collector → scorer → dashboard. Dashboard never calls collector.
 
 ## Scoring Model
-PRIOR = -0.5. sigmoid(PRIOR + sum(WEIGHTS[k] * signal_k)) * 100.
+PRIOR = -0.15. sigmoid(PRIOR + sum(WEIGHTS[k] * signal_k)) * 100.
 
 Positive signals: cpu_activity_while_idle (+0.2), cpu_zscore (+0.3),
 external_connections (+0.9), lineage_score (+1.2), process_age_days (+0.4).
