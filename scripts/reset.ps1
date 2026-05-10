@@ -4,7 +4,7 @@ $hasDebugPriv = (whoami /priv 2>$null) -match "SeDebugPrivilege"
 if (-not $isAdmin -and -not $hasDebugPriv) {
     $ps = Start-Process powershell `
         -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" `
-        -Verb RunAs -PassThru
+        -Verb RunAs -PassThru -WindowStyle Hidden
     $ps.WaitForExit()
     exit $ps.ExitCode
 }
