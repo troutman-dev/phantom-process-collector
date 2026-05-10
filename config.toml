@@ -18,7 +18,7 @@ known_user_apps = [
 ]
 known_system_parents = [
     "services.exe", "svchost.exe", "explorer.exe", "wininit.exe",
-    "winlogon.exe", "lsass.exe", "csrss.exe", "smss.exe", "System", "Registry",
+    "winlogon.exe", "lsass.exe", "csrss.exe", "smss.exe", "system", "registry",
 ]
 
 [logging]
